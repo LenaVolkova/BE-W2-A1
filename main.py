@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 import uvicorn
 
 # Create an app
@@ -10,6 +11,9 @@ tasks_db = [
     {"id": 2, "title": "Create first endpoint", "done": True},
     {"id": 3, "title": "Add tasks", "done": False}
 ]
+
+class TaskCreate(BaseModel):
+    title: str
 
 # Configure root path - retutn API description
 @app.get("/")
@@ -36,6 +40,50 @@ def get_task_by_id(task_id: int):
     # If there is no task with such a number, then return 404 error code
     raise HTTPException(status_code=404, detail="Task not found")
 
+#Enpoint for adding new task
+@app.post("/tasks", status_code=201)
+def create_task(task_data: TaskCreate):
+    # Delete spaces from string's ends
+    clean_title = task_data.title.strip()
+    
+    # If the title is not empty
+    if not clean_title:
+        raise HTTPException(
+            status_code=400, 
+            detail="Title cannot be empty or contain only spaces"
+        )
+    
+    new_id = max([t["id"] for t in tasks_db], default=0) + 1
+    
+    new_task = {
+        "id": new_id,
+        "title": clean_title,  
+        "done": False              
+    }
+    
+    tasks_db.append(new_task)
+    return new_task
+
+# How to test:
+#curl -i -X POST http://localhost:8000/tasks \     
+#     -H "Content-Type: application/json" \
+#     -d '{"title": "    "}'
+#HTTP/1.1 400 Bad Request
+#date: Mon, 20 Jul 2026 11:35:59 GMT
+#server: uvicorn
+#content-length: 57
+#content-type: application/json
+#{"detail":"Title cannot be empty or contain only spaces"}% 
+
+#curl -i -X POST http://localhost:8000/tasks \ 
+#     -H "Content-Type: application/json" \
+#     -d '{"title": "Buy milk"}'
+#HTTP/1.1 201 Created
+#date: Mon, 20 Jul 2026 11:36:29 GMT
+#server: uvicorn
+#content-length: 40
+#content-type: application/json
+#{"id":4,"title":"Buy milk","done":false}%
 
 
 # Launch server 
