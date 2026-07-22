@@ -1,17 +1,20 @@
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
-#from typing import Optional
+from typing import Optional
 import uvicorn
 
 # Create an app
 app = FastAPI()
 
-# Dictionary with tasks instead of db
-tasks_db = [
+# Dictionary with tasks instead of db, 
+# initial values are stored independently in order to make a reset if needed.
+INITIAL_TASKS = [
     {"id": 1, "title": "Install FastAPI", "done": False},
     {"id": 2, "title": "Create first endpoint", "done": True},
     {"id": 3, "title": "Add tasks", "done": False}
 ]
+
+tasks_db = list(INITIAL_TASKS)
 
 class TaskCreate(BaseModel):
     title: str
@@ -33,10 +36,23 @@ def read_root():
 def get_info():
     return { "status": "ok" }
 
-# Endpoint to get tasks list
+# Endpoint to get tasks list with parameters
 @app.get("/tasks")
-def get_tasks():
-    return tasks_db
+def get_tasks(
+    done: Optional[bool] = None,
+    search: Optional[str] = None
+):
+    filtered_tasks = tasks_db
+    
+    if done is not None:
+        filtered_tasks = [t for t in filtered_tasks if t["done"] == done]
+        
+    if search:
+        filtered_tasks = [
+            t for t in filtered_tasks 
+            if search.lower() in t["title"].lower()
+        ]
+    return filtered_tasks
 
 #Endpoint to get a task by id
 @app.get("/tasks/{task_id}")
@@ -115,6 +131,26 @@ async def delete_task(id: int):
     # 4. Returns None (FastAPI creates response 204 "no content" automatically)
     return None
 
+#Endpoint for getting overall info on tasks
+@app.get("/stats")
+def get_stats():
+    total = len(tasks_db)
+    done_count = sum(1 for t in tasks_db if t["done"])
+    open_count = total - done_count
+    
+    return {
+        "total": total,
+        "done": done_count,
+        "open": open_count
+    }
+
+#Endpoint to reset list of tasks to initial values
+@app.post("/reset")
+def reset_tasks():
+    global tasks_db
+    # Deep copy of initial tasks
+    tasks_db = [t.copy() for t in INITIAL_TASKS]
+    return {"message": "Tasks database has been reset to initial state"}
 
 # Launch server 
 if __name__ == "__main__":
