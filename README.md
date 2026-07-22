@@ -50,7 +50,7 @@ curl -i -X DELETE http://localhost:8000/tasks/4
 ```
 ---
 Some new features has been added:
-### search by parameters
+### Extras endpoints
 Searching tasks by their status
 ```
  curl -s "http://127.0.0.1:8000/tasks?done=true" | json_pp
