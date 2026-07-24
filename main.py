@@ -1,157 +1,162 @@
-from fastapi import FastAPI, HTTPException, status
-from pydantic import BaseModel, Field
-from typing import Optional
-import uvicorn
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional, List
 
-# Create an app
-app = FastAPI()
+app = FastAPI(
+    title="Task Management API",
+    description="A simple FastAPI application to manage a list of tasks with search filters, statistics, and database reset functionality.",
+    version="1.0.0"
+)
 
-# Dictionary with tasks instead of db, 
-# initial values are stored independently in order to make a reset if needed.
+# Hardcoded initial list of tasks
 INITIAL_TASKS = [
-    {"id": 1, "title": "Install FastAPI", "done": False},
-    {"id": 2, "title": "Create first endpoint", "done": True},
-    {"id": 3, "title": "Add tasks", "done": False}
+    {"id": 1, "title": "Configure FastAPI project", "done": True},
+    {"id": 2, "title": "Implement CRUD endpoints", "done": False},
+    {"id": 3, "title": "Test API with Swagger UI", "done": False}
 ]
 
-tasks_db = list(INITIAL_TASKS)
+# In-memory "database" copy
+tasks_db = [t.copy() for t in INITIAL_TASKS]
 
+# Pydantic schemas for request validation
 class TaskCreate(BaseModel):
-    title: str
+    title: str = Field(..., description="The title of the task")
 
-# Validation for update (PUT)
-class UpdateTaskModel(BaseModel):
-    # Field(..., min_length=1) is to ensure that the string is not empty.
-    # "Optional" allows to update "title" or "done", or both.
-    title: str | None = Field(None, min_length=1, description="Task's title cannot be empty")
-    done: bool | None = Field(None, description="Status of the task")
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Title cannot be empty or consist only of whitespace")
+        return v.strip()
 
-# Configure root path - retutn API description
-@app.get("/")
+class TaskUpdate(BaseModel):
+    title: Optional[str] = Field(None, description="The new title of the task")
+    done: Optional[bool] = Field(None, description="The new status of the task")
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_empty(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError("Title cannot be empty or consist only of whitespace")
+        return v.strip() if v is not None else None
+
+# Endpoints
+@app.get("/", tags=["General"])
 def read_root():
-    return { "name": "Task API", "version": "1.0", "endpoints": ["/tasks"] }
+    """
+    Get application description.
+    """
+    return {
+        "app_name": "Simple Task Manager API",
+        "description": "A lightweight FastAPI application for managing tasks, supporting CRUD operations, status statistics, and full reset capability.",
+        "version": "1.0.0",
+        "documentation_url": "/docs"
+    }
 
-#Endpoint to check that server is working
-@app.get("/health")
-def get_info():
-    return { "status": "ok" }
+@app.get("/health", tags=["General"])
+def health_check():
+    """
+    Check if the application is running.
+    """
+    return {"status": "ok"}
 
-# Endpoint to get tasks list with parameters
-@app.get("/tasks")
+@app.get("/tasks", tags=["Tasks"])
 def get_tasks(
-    done: Optional[bool] = None,
-    search: Optional[str] = None
+    search: Optional[str] = Query(None, description="Search term to filter task titles (case-insensitive)"),
+    done: Optional[bool] = Query(None, description="Filter tasks by status 'done' (true/false)")
 ):
-    filtered_tasks = tasks_db
-    
+    """
+    Retrieve the list of tasks.
+    If no query parameters are specified, returns the list of all tasks.
+    If 'search' or 'done' are specified, returns tasks matching those criteria.
+    """
+    filtered = tasks_db
+    if search is not None:
+        filtered = [t for t in filtered if search.lower() in t["title"].lower()]
     if done is not None:
-        filtered_tasks = [t for t in filtered_tasks if t["done"] == done]
-        
-    if search:
-        filtered_tasks = [
-            t for t in filtered_tasks 
-            if search.lower() in t["title"].lower()
-        ]
-    return filtered_tasks
+        filtered = [t for t in filtered if t["done"] == done]
+    return filtered
 
-#Endpoint to get a task by id
-@app.get("/tasks/{task_id}")
+@app.get("/tasks/{task_id}", tags=["Tasks"])
 def get_task_by_id(task_id: int):
+    """
+    Retrieve details of a task with the specified ID.
+    Raises HTTP 404 if the task is not found.
+    """
     for task in tasks_db:
         if task["id"] == task_id:
             return task
-            
-    # If there is no task with such a number, then return 404 error code
-    raise HTTPException(status_code=404, detail="Task not found")
+    raise HTTPException(status_code=404, detail=f"Task with ID {task_id} not found")
 
-#Enpoint for adding new task
-@app.post("/tasks", status_code=201)
-def create_task(task_data: TaskCreate):
-    # Delete spaces from string's ends
-    clean_title = task_data.title.strip()
-    
-    # If the title is not empty
-    if not clean_title:
-        raise HTTPException(
-            status_code=400, 
-            detail="Title cannot be empty or contain only spaces"
-        )
-    
-    new_id = max([t["id"] for t in tasks_db], default=0) + 1
-    
+@app.post("/task", status_code=201, tags=["Tasks"])
+def create_task(task_in: TaskCreate):
+    """
+    Create a new task.
+    The task ID is auto-incremented, and the status 'done' defaults to false.
+    """
+    next_id = max([t["id"] for t in tasks_db], default=0) + 1
     new_task = {
-        "id": new_id,
-        "title": clean_title,  
-        "done": False              
+        "id": next_id,
+        "title": task_in.title,
+        "done": False
     }
-    
     tasks_db.append(new_task)
     return new_task
 
+@app.put("/tasks/{task_id}", tags=["Tasks"])
+def update_task(task_id: int, task_in: TaskUpdate):
+    """
+    Update a task's title and/or completion status by ID.
+    Raises HTTP 404 if the task is not found.
+    """
+    for task in tasks_db:
+        if task["id"] == task_id:
+            if task_in.title is not None:
+                task["title"] = task_in.title
+            if task_in.done is not None:
+                task["done"] = task_in.done
+            return task
+    raise HTTPException(status_code=404, detail=f"Task with ID {task_id} not found")
 
-### Endpoint PUT /tasks/{id}
-@app.put("/tasks/{id}")
-async def update_task(id: int, task_body: UpdateTaskModel):
-    task = next((t for t in tasks_db if t["id"] == id), None)
-    
-    if task is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail=f"Task with id {id} not found"
-        )
-    
-    update_data = task_body.model_dump(exclude_unset=True)
-    if not update_data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Body cannot be empty. Provide 'title' or 'done'."
-        )
-    
-    if "title" in update_data:
-        task["title"] = update_data["title"]
-    if "done" in update_data:
-        task["done"] = update_data["done"]
-        
-    return task
+@app.delete("/tasks/{task_id}", tags=["Tasks"])
+def delete_task(task_id: int):
+    """
+    Delete a task from the list by ID.
+    Raises HTTP 404 if the task is not found.
+    """
+    for i, task in enumerate(tasks_db):
+        if task["id"] == task_id:
+            tasks_db.pop(i)
+            return {"message": f"Task with ID {task_id} deleted successfully"}
+    raise HTTPException(status_code=404, detail=f"Task with ID {task_id} not found")
 
-
-### Endpoint DELETE /tasks/{id}
-@app.delete("/tasks/{id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_task(id: int):
-    task = next((t for t in tasks_db if t["id"] == id), None)
-    
-    if task is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail=f"Task with id {id} not found"
-        )
-        
-    tasks_db.remove(task)
-    
-    # 4. Returns None (FastAPI creates response 204 "no content" automatically)
-    return None
-
-#Endpoint for getting overall info on tasks
-@app.get("/stats")
+@app.get("/stats", tags=["Statistics"])
 def get_stats():
+    """
+    Get statistics: total number of tasks, completed tasks, and pending tasks.
+    """
     total = len(tasks_db)
     done_count = sum(1 for t in tasks_db if t["done"])
-    open_count = total - done_count
-    
+    not_done_count = total - done_count
     return {
-        "total": total,
-        "done": done_count,
-        "open": open_count
+        "total_tasks": total,
+        "done_tasks": done_count,
+        "not_done_tasks": not_done_count
     }
 
-#Endpoint to reset list of tasks to initial values
-@app.post("/reset")
+@app.post("/reset", tags=["Database Control"])
+@app.get("/reset", tags=["Database Control"])
 def reset_tasks():
+    """
+    Re-initialize the task database to its initial hardcoded state.
+    """
     global tasks_db
-    # Deep copy of initial tasks
     tasks_db = [t.copy() for t in INITIAL_TASKS]
-    return {"message": "Tasks database has been reset to initial state"}
+    return {
+        "message": "Task database has been reset to the initial state",
+        "tasks": tasks_db
+    }
 
-# Launch server 
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
